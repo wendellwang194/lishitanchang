@@ -349,6 +349,100 @@ function fitElementToViewport(element, minFontSizePx = 12) {
   }
 }
 
+function splitLineByPunctuation(line) {
+  const tokens = line.match(/[^，,。.！？!?；;：:]+[，,。.！？!?；;：:]?|[，,。.！？!?；;：:]/g);
+  if (!tokens || tokens.length === 0) {
+    return [line];
+  }
+  return tokens;
+}
+
+function wrapLineAtPunctuation(line, measureLineWidth, maxWidth) {
+  if (!line || measureLineWidth(line) <= maxWidth) {
+    return [line];
+  }
+
+  const tokens = splitLineByPunctuation(line);
+  const wrapped = [];
+  let current = "";
+
+  for (const token of tokens) {
+    const candidate = current + token;
+    if (current && measureLineWidth(candidate) > maxWidth) {
+      wrapped.push(current);
+      current = token;
+    } else {
+      current = candidate;
+    }
+  }
+
+  if (current) {
+    wrapped.push(current);
+  }
+
+  return wrapped.length > 0 ? wrapped : [line];
+}
+
+function wrapTextAtPunctuationToWidth(text, element, maxWidth) {
+  if (!text || !colliderCtx) {
+    return text;
+  }
+
+  const style = window.getComputedStyle(element);
+  const font = `${style.fontStyle} ${style.fontVariant} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+  colliderCtx.font = font;
+  const measureLineWidth = (line) =>
+    colliderCtx.measureText(line && line.length > 0 ? line : " ").width;
+
+  const lines = text.split("\n");
+  const output = [];
+  let changed = false;
+
+  for (const line of lines) {
+    if (measureLineWidth(line) <= maxWidth) {
+      output.push(line);
+      continue;
+    }
+
+    const wrapped = wrapLineAtPunctuation(line, measureLineWidth, maxWidth);
+    if (wrapped.length > 1 || wrapped[0] !== line) {
+      changed = true;
+    }
+    output.push(...wrapped);
+  }
+
+  return changed ? output.join("\n") : text;
+}
+
+function layoutLiveTextForViewport(entry, sourceText) {
+  const safeSource = sourceText.length > 0 ? sourceText : " ";
+  entry.element.textContent = safeSource;
+
+  const viewportWidth = state.viewport.width || stage.clientWidth || window.innerWidth || 0;
+  const maxWidth = Math.max(76, viewportWidth - PHYSICS.sidePadding * 2 - 6);
+  let renderedText = safeSource;
+  let rect = entry.element.getBoundingClientRect();
+
+  if (rect.width > maxWidth) {
+    const wrapped = wrapTextAtPunctuationToWidth(sourceText, entry.element, maxWidth);
+    if (wrapped && wrapped !== sourceText) {
+      renderedText = wrapped;
+      entry.element.textContent = renderedText;
+      rect = entry.element.getBoundingClientRect();
+    }
+  }
+
+  // Final fallback: if there are very long non-punctuation runs, shrink slightly to avoid clipping.
+  fitElementToViewport(entry.element, 12);
+  rect = entry.element.getBoundingClientRect();
+  renderedText = entry.element.textContent || renderedText;
+
+  return {
+    text: renderedText,
+    rect
+  };
+}
+
 function setElementPosition(element, x, y) {
   element.style.left = `${x}px`;
   element.style.top = `${y}px`;
@@ -361,13 +455,17 @@ function setBodyTransform(body) {
 }
 
 function applyLiveText(entry, text) {
-  entry.displayText = text;
-  entry.element.textContent = text.length > 0 ? text : " ";
-  fitElementToViewport(entry.element, 14);
-  const rect = entry.element.getBoundingClientRect();
-  const fixed = clampPointBySize(entry.x, entry.y, rect.width, rect.height);
-  entry.x = fixed.x;
-  entry.y = fixed.y;
+  entry.sourceText = text;
+  const laidOut = layoutLiveTextForViewport(entry, text);
+  entry.displayText = laidOut.text;
+
+  const minX = PHYSICS.sidePadding + laidOut.rect.width / 2;
+  const maxX = state.viewport.width - PHYSICS.sidePadding - laidOut.rect.width / 2;
+  const minY = PHYSICS.ceilingPadding + laidOut.rect.height / 2;
+  const maxY = state.viewport.height - PHYSICS.floorPadding - laidOut.rect.height / 2;
+
+  entry.x = clamp(entry.x, minX, maxX);
+  entry.y = clamp(entry.y, minY, maxY);
   setElementPosition(entry.element, entry.x, entry.y);
 }
 
@@ -434,6 +532,7 @@ function createLivePhrase(x, y, text) {
     rawText: text,
     fullText: formattedText,
     fullUnits: Array.from(formattedText),
+    sourceText: "",
     displayText: "",
     typedLength: 0,
     typeTimer: null,
@@ -1235,7 +1334,7 @@ function repositionOnResize() {
     entry.element.style.removeProperty("line-height");
     entry.x *= widthRatio;
     entry.y *= prevHeight > 0 ? state.viewport.height / prevHeight : 1;
-    applyLiveText(entry, entry.displayText);
+    applyLiveText(entry, entry.sourceText || entry.displayText);
   }
 }
 
