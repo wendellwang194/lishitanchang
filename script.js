@@ -318,6 +318,37 @@ function clampPointBySize(x, y, width, height) {
   };
 }
 
+function fitElementToViewport(element, minFontSizePx = 12) {
+  if (!element) {
+    return;
+  }
+
+  const viewportWidth = state.viewport.width || stage.clientWidth || window.innerWidth || 0;
+  if (viewportWidth <= 0) {
+    return;
+  }
+
+  const maxWidth = Math.max(64, viewportWidth - PHYSICS.sidePadding * 2 - 6);
+  let rect = element.getBoundingClientRect();
+  if (rect.width <= maxWidth) {
+    return;
+  }
+
+  const style = window.getComputedStyle(element);
+  let fontSize = Number.parseFloat(style.fontSize) || 16;
+  const lineHeight = readComputedLineHeight(style, fontSize);
+  const lineRatio = fontSize > 0 ? lineHeight / fontSize : 1.35;
+
+  let safety = 0;
+  while (rect.width > maxWidth && fontSize > minFontSizePx && safety < 36) {
+    fontSize -= 0.5;
+    element.style.fontSize = `${fontSize.toFixed(2)}px`;
+    element.style.lineHeight = `${(fontSize * lineRatio).toFixed(2)}px`;
+    rect = element.getBoundingClientRect();
+    safety += 1;
+  }
+}
+
 function setElementPosition(element, x, y) {
   element.style.left = `${x}px`;
   element.style.top = `${y}px`;
@@ -332,6 +363,7 @@ function setBodyTransform(body) {
 function applyLiveText(entry, text) {
   entry.displayText = text;
   entry.element.textContent = text.length > 0 ? text : " ";
+  fitElementToViewport(entry.element, 14);
   const rect = entry.element.getBoundingClientRect();
   const fixed = clampPointBySize(entry.x, entry.y, rect.width, rect.height);
   entry.x = fixed.x;
@@ -520,6 +552,7 @@ function releaseToStack(entry) {
   entry.element.classList.remove("phrase-live");
   entry.element.classList.add("stack-block");
   entry.element.dataset.bodyId = String(entry.id);
+  fitElementToViewport(entry.element, 12);
 
   const body = {
     id: entry.id,
@@ -1178,6 +1211,9 @@ function repositionOnResize() {
   const newFloor = state.viewport.height - PHYSICS.floorPadding;
 
   for (const body of state.stackBodies) {
+    body.element.style.removeProperty("font-size");
+    body.element.style.removeProperty("line-height");
+    fitElementToViewport(body.element, 12);
     body.x *= widthRatio;
 
     const distanceToFloor = oldFloor - body.y;
@@ -1195,6 +1231,8 @@ function repositionOnResize() {
   }
 
   for (const entry of state.liveEntries) {
+    entry.element.style.removeProperty("font-size");
+    entry.element.style.removeProperty("line-height");
     entry.x *= widthRatio;
     entry.y *= prevHeight > 0 ? state.viewport.height / prevHeight : 1;
     applyLiveText(entry, entry.displayText);

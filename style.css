@@ -315,11 +315,11 @@ body::before {
 
 @media (max-width: 720px) {
   .phrase {
-    font-size: clamp(17px, 5.2vw, 24px);
+    font-size: clamp(16px, 4.8vw, 22px);
   }
 
   .phrase-live {
-    font-size: clamp(23px, 7.1vw, 32px);
+    font-size: clamp(21px, 6.3vw, 29px);
   }
 
   .hint {
