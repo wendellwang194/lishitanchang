@@ -78,6 +78,7 @@ const state = {
   isMuted: false,
   drag: null,
   suppressNextClick: false,
+  suppressClickUntil: 0,
   currentPlayback: null,
   clearingInProgress: false
 };
@@ -1235,6 +1236,7 @@ async function clearAllPhrases() {
   state.dissolveGeneration += 1;
   state.dissolveRunning = false;
   state.suppressNextClick = false;
+  state.suppressClickUntil = 0;
 
   if (state.drag && state.drag.body) {
     state.drag.body.dragging = false;
@@ -1313,8 +1315,39 @@ function toggleMute() {
   updateMuteButton();
 }
 
+function resolveTargetElement(target) {
+  if (target instanceof Element) {
+    return target;
+  }
+  if (target && target.parentElement instanceof Element) {
+    return target.parentElement;
+  }
+  return null;
+}
+
+function isControlTarget(target) {
+  const element = resolveTargetElement(target);
+  if (!element) {
+    return false;
+  }
+  return Boolean(element.closest("#clearBtn, #muteBtn"));
+}
+
+function isStackBlockTarget(target) {
+  const element = resolveTargetElement(target);
+  if (!element) {
+    return false;
+  }
+  return Boolean(element.closest(".stack-block"));
+}
+
 function findStackBodyByElement(target) {
-  const block = target.closest(".stack-block");
+  const element = resolveTargetElement(target);
+  if (!element) {
+    return null;
+  }
+
+  const block = element.closest(".stack-block");
   if (!block) {
     return null;
   }
@@ -1341,7 +1374,7 @@ function playAudioForBody(body) {
   }
 }
 
-function startBodyDrag(body, event) {
+function startBodyDrag(body, point, pointerId = null, touchId = null) {
   body.dragging = true;
   body.vx = 0;
   body.vy = 0;
@@ -1352,12 +1385,14 @@ function startBodyDrag(body, event) {
 
   state.drag = {
     body,
-    offsetX: event.clientX - body.x,
-    offsetY: event.clientY - body.y,
-    startX: event.clientX,
-    startY: event.clientY,
-    lastX: event.clientX,
-    lastY: event.clientY,
+    pointerId,
+    touchId,
+    offsetX: point.x - body.x,
+    offsetY: point.y - body.y,
+    startX: point.x,
+    startY: point.y,
+    lastX: point.x,
+    lastY: point.y,
     lastTime: performance.now(),
     vx: 0,
     vy: 0,
@@ -1369,29 +1404,7 @@ function startBodyDrag(body, event) {
   playAudioForBody(body);
 }
 
-function onStageMouseDown(event) {
-  if (state.clearingInProgress) {
-    return;
-  }
-
-  if (event.button !== 0) {
-    return;
-  }
-
-  if (event.target.closest("#clearBtn, #muteBtn")) {
-    return;
-  }
-
-  const body = findStackBodyByElement(event.target);
-  if (!body) {
-    return;
-  }
-
-  event.preventDefault();
-  startBodyDrag(body, event);
-}
-
-function onStageMouseMove(event) {
+function updateDragByPoint(clientX, clientY) {
   if (!state.drag) {
     return;
   }
@@ -1399,16 +1412,16 @@ function onStageMouseMove(event) {
   const drag = state.drag;
   const body = drag.body;
 
-  const rawX = event.clientX - drag.offsetX;
-  const rawY = event.clientY - drag.offsetY;
+  const rawX = clientX - drag.offsetX;
+  const rawY = clientY - drag.offsetY;
   const fixed = clampPointBySize(rawX, rawY, body.width, body.height);
   body.x = fixed.x;
   body.y = fixed.y;
 
   const now = performance.now();
   const dt = Math.max(0.001, (now - drag.lastTime) / 1000);
-  const instantVX = (event.clientX - drag.lastX) / dt;
-  const instantVY = (event.clientY - drag.lastY) / dt;
+  const instantVX = (clientX - drag.lastX) / dt;
+  const instantVY = (clientY - drag.lastY) / dt;
   drag.vx = drag.vx * 0.55 + instantVX * 0.45;
   drag.vy = drag.vy * 0.55 + instantVY * 0.45;
 
@@ -1439,34 +1452,102 @@ function onStageMouseMove(event) {
 
   setBodyTransform(body);
 
-  if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 2) {
+  if (!drag.moved && Math.hypot(clientX - drag.startX, clientY - drag.startY) > 2) {
     drag.moved = true;
   }
 
-  drag.lastX = event.clientX;
-  drag.lastY = event.clientY;
+  drag.lastX = clientX;
+  drag.lastY = clientY;
   drag.lastTime = now;
 }
 
-function onStageMouseUp() {
+function onStagePointerDown(event) {
+  if (state.clearingInProgress) {
+    return;
+  }
+
+  if (state.drag) {
+    return;
+  }
+
+  if (event.pointerType === "mouse" && event.button !== 0) {
+    return;
+  }
+
+  if (isControlTarget(event.target)) {
+    return;
+  }
+
+  const body = findStackBodyByElement(event.target);
+  if (!body) {
+    return;
+  }
+
+  event.preventDefault();
+  if (typeof stage.setPointerCapture === "function" && event.pointerId !== undefined) {
+    try {
+      stage.setPointerCapture(event.pointerId);
+    } catch (error) {
+      // Ignore capture errors from unsupported browser states.
+    }
+  }
+
+  startBodyDrag(
+    body,
+    {
+      x: event.clientX,
+      y: event.clientY
+    },
+    event.pointerId
+  );
+}
+
+function onStagePointerMove(event) {
+  if (!state.drag) {
+    return;
+  }
+
+  const drag = state.drag;
+  if (drag.pointerId !== null && drag.pointerId !== undefined && event.pointerId !== drag.pointerId) {
+    return;
+  }
+
+  event.preventDefault();
+  updateDragByPoint(event.clientX, event.clientY);
+}
+
+function finishBodyDrag(cancelled = false) {
   if (!state.drag) {
     return;
   }
 
   const drag = state.drag;
   const body = drag.body;
+  if (drag.pointerId !== null && drag.pointerId !== undefined && typeof stage.releasePointerCapture === "function") {
+    try {
+      if (stage.hasPointerCapture?.(drag.pointerId)) {
+        stage.releasePointerCapture(drag.pointerId);
+      }
+    } catch (error) {
+      // Ignore release errors from unsupported browser states.
+    }
+  }
+
   body.dragging = false;
   body.element.classList.remove("is-dragging");
 
-  body.vx = clamp(drag.vx * 0.42, -880, 880);
-  body.vy = clamp(drag.vy * 0.42, -880, 880);
+  const releaseScale = cancelled ? 0.12 : 0.42;
+  body.vx = clamp(drag.vx * releaseScale, -880, 880);
+  body.vy = clamp(drag.vy * releaseScale, -880, 880);
   body.inverseMass = body.mass > 0 ? 1 / body.mass : 0;
   body.inverseInertia = body.inertia > 0 ? 1 / body.inertia : 0;
 
   const releaseSpin =
     (drag.vx * drag.offsetY - drag.vy * drag.offsetX) /
     Math.max(1600, body.width * body.width + body.height * body.height);
-  body.angularVelocity = clamp(releaseSpin + drag.angularVelocity * 0.85, -4.2, 4.2);
+  body.angularVelocity = cancelled
+    ? 0
+    : clamp(releaseSpin + drag.angularVelocity * 0.85, -4.2, 4.2);
   body.uprightAssist = Math.abs(normalizeAngle(body.angle)) > UPRIGHT.settleTiltThreshold;
 
   if (Math.abs(body.vx) < 16) {
@@ -1477,9 +1558,131 @@ function onStageMouseUp() {
   }
 
   state.drag = null;
-  setTimeout(() => {
-    state.suppressNextClick = false;
-  }, 0);
+  state.suppressNextClick = true;
+  state.suppressClickUntil = performance.now() + 520;
+}
+
+function onStagePointerUp(event) {
+  if (!state.drag) {
+    return;
+  }
+
+  const drag = state.drag;
+  if (drag.pointerId !== null && drag.pointerId !== undefined && event.pointerId !== drag.pointerId) {
+    return;
+  }
+
+  finishBodyDrag(false);
+}
+
+function onStagePointerCancel(event) {
+  if (!state.drag) {
+    return;
+  }
+
+  const drag = state.drag;
+  if (drag.pointerId !== null && drag.pointerId !== undefined && event.pointerId !== drag.pointerId) {
+    return;
+  }
+
+  finishBodyDrag(true);
+}
+
+function findTouchById(touchList, touchId) {
+  if (!touchList || touchId === null || touchId === undefined) {
+    return null;
+  }
+  for (let i = 0; i < touchList.length; i += 1) {
+    if (touchList[i].identifier === touchId) {
+      return touchList[i];
+    }
+  }
+  return null;
+}
+
+function getPrimaryTouch(event) {
+  if (event.touches && event.touches.length > 0) {
+    return event.touches[0];
+  }
+  if (event.changedTouches && event.changedTouches.length > 0) {
+    return event.changedTouches[0];
+  }
+  return null;
+}
+
+function onStageTouchStart(event) {
+  if (state.clearingInProgress || state.drag) {
+    return;
+  }
+
+  if (isControlTarget(event.target)) {
+    return;
+  }
+
+  const body = findStackBodyByElement(event.target);
+  if (!body) {
+    return;
+  }
+
+  const touch = getPrimaryTouch(event);
+  if (!touch) {
+    return;
+  }
+
+  event.preventDefault();
+  startBodyDrag(
+    body,
+    {
+      x: touch.clientX,
+      y: touch.clientY
+    },
+    null,
+    touch.identifier
+  );
+}
+
+function onStageTouchMove(event) {
+  if (!state.drag || state.drag.touchId === null || state.drag.touchId === undefined) {
+    return;
+  }
+
+  const touch =
+    findTouchById(event.touches, state.drag.touchId) ||
+    findTouchById(event.changedTouches, state.drag.touchId);
+  if (!touch) {
+    return;
+  }
+
+  event.preventDefault();
+  updateDragByPoint(touch.clientX, touch.clientY);
+}
+
+function onStageTouchEnd(event) {
+  if (!state.drag || state.drag.touchId === null || state.drag.touchId === undefined) {
+    return;
+  }
+
+  const touch = findTouchById(event.changedTouches, state.drag.touchId);
+  if (!touch) {
+    return;
+  }
+
+  event.preventDefault();
+  finishBodyDrag(false);
+}
+
+function onStageTouchCancel(event) {
+  if (!state.drag || state.drag.touchId === null || state.drag.touchId === undefined) {
+    return;
+  }
+
+  const touch = findTouchById(event.changedTouches, state.drag.touchId);
+  if (!touch) {
+    return;
+  }
+
+  event.preventDefault();
+  finishBodyDrag(true);
 }
 
 stage.addEventListener("click", (event) => {
@@ -1488,15 +1691,20 @@ stage.addEventListener("click", (event) => {
   }
 
   if (state.suppressNextClick) {
+    if (performance.now() <= state.suppressClickUntil || state.suppressClickUntil === 0) {
+      state.suppressNextClick = false;
+      state.suppressClickUntil = 0;
+      return;
+    }
     state.suppressNextClick = false;
+    state.suppressClickUntil = 0;
+  }
+
+  if (isControlTarget(event.target)) {
     return;
   }
 
-  if (event.target.closest("#clearBtn, #muteBtn")) {
-    return;
-  }
-
-  if (event.target.closest(".stack-block")) {
+  if (isStackBlockTarget(event.target)) {
     return;
   }
 
@@ -1519,9 +1727,14 @@ muteBtn.addEventListener("click", (event) => {
   toggleMute();
 });
 
-stage.addEventListener("mousedown", onStageMouseDown);
-window.addEventListener("mousemove", onStageMouseMove);
-window.addEventListener("mouseup", onStageMouseUp);
+stage.addEventListener("pointerdown", onStagePointerDown);
+window.addEventListener("pointermove", onStagePointerMove, { passive: false });
+window.addEventListener("pointerup", onStagePointerUp);
+window.addEventListener("pointercancel", onStagePointerCancel);
+stage.addEventListener("touchstart", onStageTouchStart, { passive: false });
+window.addEventListener("touchmove", onStageTouchMove, { passive: false });
+window.addEventListener("touchend", onStageTouchEnd, { passive: false });
+window.addEventListener("touchcancel", onStageTouchCancel, { passive: false });
 window.addEventListener("resize", repositionOnResize);
 
 updateViewport();
