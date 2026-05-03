@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>离石弹唱 · 唱词声场</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="stage" id="stage">
+      <button class="mute-btn" id="muteBtn" type="button" aria-label="静音">静音</button>
+      <button class="clear-btn is-hidden" id="clearBtn" type="button" aria-label="清空页面">落幕清场</button>
+
+      <p class="hint">点击空白处，让唱词从声音里长出来</p>
+      <p class="guide-inline ui-overlay">每次点击会触发一段唱词与对应演唱，唱毕后落地堆叠。</p>
+      <p class="empty-tip hidden" id="emptyTip">
+        还没有演唱音频。
+      </p>
+    </main>
+
+    <script src="audio/manifest.js"></script>
+    <script src="script.js"></script>
+  </body>
+</html>
