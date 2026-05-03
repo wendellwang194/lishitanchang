@@ -491,6 +491,7 @@ function stopTypewriter(entry) {
 function completeTypewriter(entry) {
   stopTypewriter(entry);
   entry.typedLength = entry.fullUnits.length;
+  entry.typeDone = true;
   applyLiveText(entry, entry.fullText);
 }
 
@@ -510,6 +511,15 @@ function runTypewriter(entry) {
     entry.typedLength += 1;
     const partial = entry.fullUnits.slice(0, entry.typedLength).join("");
     applyLiveText(entry, partial);
+
+    if (entry.typedLength >= entry.fullUnits.length) {
+      entry.typeDone = true;
+      entry.typeTimer = null;
+      if (entry.dropAfterTypeDone) {
+        releaseToStack(entry);
+      }
+      return;
+    }
 
     const nextChar = entry.fullUnits[entry.typedLength] || "";
     entry.typeTimer = setTimeout(step, getTypeDelay(nextChar));
@@ -536,6 +546,8 @@ function createLivePhrase(x, y, text) {
     displayText: "",
     typedLength: 0,
     typeTimer: null,
+    typeDone: false,
+    dropAfterTypeDone: false,
     released: false,
     audio: null,
     audioFile: null
@@ -697,27 +709,6 @@ function cleanupAudio(audio) {
   }
 }
 
-function getPlaybackPriority(kind) {
-  return kind === "click" ? 2 : 1;
-}
-
-function canReplacePlayback(nextKind) {
-  if (!state.currentPlayback || !state.currentPlayback.audio) {
-    return true;
-  }
-
-  const currentPriority = getPlaybackPriority(state.currentPlayback.kind);
-  const nextPriority = getPlaybackPriority(nextKind);
-  if (nextPriority > currentPriority) {
-    return true;
-  }
-  if (nextPriority < currentPriority) {
-    return false;
-  }
-
-  return true;
-}
-
 function stopPlaybackObject(playback, resetTime = false) {
   if (!playback || !playback.audio) {
     return;
@@ -742,20 +733,16 @@ function stopCurrentPlayback(resetTime = false) {
   state.currentPlayback = null;
 }
 
-function startManagedPlayback(audio, kind, onFinish) {
+function startManagedPlayback(audio, onFinish) {
   if (!audio) {
     return false;
   }
 
-  if (!canReplacePlayback(kind)) {
-    return false;
-  }
-
+  // Latest trigger always wins, regardless of source (click or drag).
   stopCurrentPlayback(false);
 
   const playback = {
-    audio,
-    kind
+    audio
   };
   state.currentPlayback = playback;
   state.activeAudios.add(audio);
@@ -822,7 +809,7 @@ function playWithPhrase(filename, x, y) {
     liveEntry.audio = null;
     releaseToStack(liveEntry);
   };
-  const started = startManagedPlayback(audio, "click", finish);
+  const started = startManagedPlayback(audio, finish);
   if (!started) {
     removeLiveEntry(liveEntry);
     audio.pause();
@@ -1502,9 +1489,19 @@ function playAudioForBody(body) {
     return;
   }
 
+  for (const entry of state.liveEntries) {
+    if (entry.released) {
+      continue;
+    }
+    entry.dropAfterTypeDone = true;
+    if (entry.typeDone) {
+      releaseToStack(entry);
+    }
+  }
+
   const audio = new Audio(toAudioSrc(body.audioFile));
   audio.preload = "auto";
-  const started = startManagedPlayback(audio, "drag");
+  const started = startManagedPlayback(audio);
   if (!started) {
     audio.pause();
     audio.src = "";
